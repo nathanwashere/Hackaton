@@ -26,7 +26,7 @@ from tensorflow.keras import layers
 # =========================
 
 # Folder of your dataset
-DATA_DIR = Path(__file__).parent
+DATA_DIR = DATA_DIR = Path(".")
 
 # Training on NORMAL data only
 TRAIN_ZIP_FILES = [
@@ -102,7 +102,53 @@ def load_train_data() -> pd.DataFrame:
     return df_all
 
 
-def print_alert_message(df_attack: pd.DataFrame, per_id: pd.DataFrame, alert_threshold: float = 0.05):
+# --- Replacement for print_alert_message in ML.py (Around line 125) ---
+
+def format_alert_message(df_attack: pd.DataFrame, per_id: pd.DataFrame, alert_threshold: float = 0.05) -> str:
+    """
+    Computes and returns the formatted textual alert interface.
+    """
+    output_lines = []
+    
+    # Global anomaly rate over all messages
+    global_anomaly_rate = df_attack["is_anomaly"].mean()
+
+    output_lines.append("--- ALERT INTERFACE ---")
+    output_lines.append(f"Global anomaly rate: {global_anomaly_rate * 100:.2f}%")
+
+    # Always show top suspicious IDs by anomaly rate
+    suspicious = per_id.sort_values("anomaly_rate_%", ascending=False).head(3)
+
+    output_lines.append("\nTop suspicious IDs:")
+    for _, row in suspicious.iterrows():
+        output_lines.append(
+            f"  - ID {row[ID_COL]}:"
+            f" anomaly_rate={row['anomaly_rate_%']:.2f}%,"
+            f" attack_fraction={row['attack_fraction_%']:.2f}%"
+        )
+
+    # Main suspect (highest anomaly rate)
+    if not suspicious.empty:
+        main_suspect = suspicious.iloc[0]
+        output_lines.append(
+            f"\nMain suspect among all IDs: ID {main_suspect[ID_COL]} "
+            f"(anomaly likelihood ≈ {main_suspect['anomaly_rate_%']:.2f}%)"
+        )
+
+
+    # Overall status
+    if global_anomaly_rate < alert_threshold:
+        output_lines.append("\n>> STATUS: Traffic appears normal. No intrusion detected (below threshold).")
+    else:
+        output_lines.append("\n!!! ALERT: Possible intrusion detected on CAN bus !!!")
+        output_lines.append(f">> Global anomaly rate is above threshold ({alert_threshold * 100:.1f}%).")
+
+    output_lines.append("------------------------")
+    
+    return "\n".join(output_lines)
+
+
+# def print_alert_message(df_attack: pd.DataFrame, per_id: pd.DataFrame, alert_threshold: float = 0.05):
     """
     Simple textual alert interface:
     - Always prints top suspicious IDs.
@@ -407,7 +453,7 @@ def train_detector() -> CanAnomalyDetector:
 #  ATTACK EVALUATION
 # =========================
 
-def evaluate_attack_file(detector: CanAnomalyDetector, zip_name: str):
+def evaluate_attack_file(detector: CanAnomalyDetector, zip_name: str) -> str:
     """
     Load one attack ZIP (e.g. test_suppress.zip / test_flooding.zip),
     run it through the detector, and print stats.
@@ -452,7 +498,7 @@ def evaluate_attack_file(detector: CanAnomalyDetector, zip_name: str):
     print(f"  Detection rate on attacks (TPR): {detection_rate * 100:.2f}%")
     print(f"  False positive rate on normals: {false_positive_rate * 100:.2f}%")
 
-    # Per-ID analysis: mean error, anomaly rate, attack fraction
+# Per-ID analysis: mean error, anomaly rate, attack fraction
     per_id = (
         df_attack.groupby(ID_COL)
         .agg(
@@ -466,13 +512,14 @@ def evaluate_attack_file(detector: CanAnomalyDetector, zip_name: str):
     per_id["anomaly_rate_%"] = per_id["anomaly_rate"] * 100.0
     per_id["attack_fraction_%"] = per_id["attack_fraction"] * 100.0
 
-    print("\nPer-ID statistics:")
-    print(per_id.to_string(index=False))
+    # print("\nPer-ID statistics:")
+    # print(per_id.to_string(index=False))
 
-    # Simple alert interface (עם חשוד עיקרי)
-    print_alert_message(df_attack, per_id, alert_threshold=0.05)
+    alert_message = format_alert_message(df_attack, per_id, alert_threshold=0.05)
 
-    print("\n")
+    print(f"Finished evaluation of {zip_name}. Returning alert message.")
+
+    return alert_message
 
 
 def summarize_attack_windows(df_attack: pd.DataFrame, window_sec: float = 1.0, top_k_ids: int = 1):
