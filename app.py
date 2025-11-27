@@ -1,65 +1,90 @@
 # app.py
 import os
-print("WORKING DIR =", os.getcwd())
-
 import streamlit as st
+import pandas as pd
 
-# Import the necessary functions from your ML.py
-from ML import train_detector, evaluate_attack_file 
-
+print("WORKING DIR =", os.getcwd())
 print("--- APP.PY STARTED SUCCESSFULLY ---")
 
-# --- GUI Layout Setup ---
-st.set_page_config(page_title="CAN IDS Analysis")
+st.set_page_config(page_title="CAN IDS Analysis", layout="wide")
 st.title("🛡️ SynCAN Intrusion Detector")
 
-# Initialize detector in session state so it persists after training
-if 'detector' not in st.session_state:
-    st.session_state.detector = None
+# -------------------------------------
+# CACHING (TRAIN MODEL ONLY ONCE)
+# -------------------------------------
+@st.cache_resource
+def load_detector():
+    """Train the model ONCE and reuse it."""
+    from ML import train_detector
+    return train_detector()
 
-# Sidebar for attack selection
+def cached_attack_eval(_detector, _attack_zip):
+    from ML import evaluate_attack_file
+    return evaluate_attack_file(_detector, _attack_zip)
+
+
+# -------------------------------------
+# Session State Defaults
+# -------------------------------------
+if "detector" not in st.session_state:
+    st.session_state.detector = None
+if "attack_output" not in st.session_state:
+    st.session_state.attack_output = {}
+
+# -------------------------------------
+# Attack options in sidebar
+# -------------------------------------
 attack_options = {
-    "plateau": "test_plateau.zip",
-    "continuous": "test_continuous.zip",
-    "playback": "test_playback.zip",
-    "suppress": "test_suppress.zip",
-    "flooding": "test_flooding.zip",
+    "Plateau": "test_plateau.zip",
+    "Continuous": "test_continuous.zip",
+    "Playback": "test_playback.zip",
+    "Suppress": "test_suppress.zip",
+    "Flooding": "test_flooding.zip",
 }
-selected_attack = st.sidebar.selectbox("Select Attack File to Evaluate:", list(attack_options.keys()))
+
+selected_attack = st.sidebar.selectbox("Select Attack Type:", list(attack_options.keys()))
 zip_file_name = attack_options[selected_attack]
 
+# -------------------------------------
+# Main Buttons
+# -------------------------------------
+col1, col2 = st.columns(2)
 
-def run_training():
-    """Wrapper function to train the model and save it to state."""
-    with st.spinner("Training Autoencoder on Normal Data..."):
-        # The function already exists in ML.py
-        st.session_state.detector = train_detector()
-    st.success("Training Complete! Model is ready for evaluation.")
+with col1:
+    if st.button("1️⃣ Train Model"):
+        with st.spinner("Training Autoencoder... This will take some time for the first run."):
+            st.session_state.detector = load_detector()
+        st.success("✅ Model trained and ready!")
 
-def run_evaluation():
-    """Wrapper function to evaluate the selected attack."""
-    if st.session_state.detector is None:
-        st.error("Model is not trained. Please click 'Train Model' first.")
-        return
-        
-    with st.spinner(f"Evaluating {selected_attack} attack on {zip_file_name}..."):
-        # The function now returns the formatted string
-        alert_output = evaluate_attack_file(st.session_state.detector, zip_file_name)
+with col2:
+    if st.button(f"2️⃣ Evaluate {selected_attack} Attack"):
+        if st.session_state.detector is None:
+            st.error("❌ Train the model first!")
+        else:
+            with st.spinner(f"Evaluating {selected_attack} attack..."):
+                # Call the updated ML function and store dict
+                from ML import evaluate_attack_file
+                st.session_state.attack_output = cached_attack_eval(
+                    st.session_state.detector, zip_file_name
+                )
+            st.success("✅ Evaluation complete!")
+
+# -------------------------------------
+# Display Attack Results
+# -------------------------------------
+if st.session_state.attack_output:
+    result = st.session_state.attack_output
     
-    st.subheader(f"Results for: {selected_attack.capitalize()} Attack")
+    st.subheader(f"Results for: {selected_attack} Attack")
     
-    # Display the result in a text area
-    st.text_area(
-        label="Suspicious ID Report",
-        value=alert_output,
-        height=300
-    )
-    st.success("Evaluation Done!")
+    # Alert message
+    if "alert_message" in result:
+        st.text_area("Alert", result["alert_message"], height=150)
 
+    # Top suspicious IDs
+    if "top_ids" in result:
+        st.write("Top suspicious IDs:", result["top_ids"])
 
-# Main buttons in the app
-if st.button("1. Train Model", key="train_btn"):
-    run_training()
-
-if st.button(f"2. Evaluate {selected_attack.capitalize()} Attack", key="eval_btn"):
-    run_evaluation()
+    # Full per-ID DataFrame
+    if "per_id" in result and isinstance(result["per_id"], pd.DataFrame):
+        st.dataframe(result["per_id"])
